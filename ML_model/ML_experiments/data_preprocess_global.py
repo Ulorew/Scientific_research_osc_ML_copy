@@ -35,8 +35,9 @@ x_fft = fft.rfftfreq(wsz, 1.0 / period_size)
 specsz = len(x_fft)
 etal_weight = np.ones(specsz)
 window_func = np.hanning(wsz)
-window_func /= np.sqrt(np.average(window_func ** 2))
 cap_window_func = np.hanning(capwsz)
+window_func /= np.sqrt(np.average(window_func ** 2))
+cap_window_func /= np.sqrt(np.average(cap_window_func ** 2))
 
 channel_ampls = defaultdict(lambda: 1, {
     "IA": 1,
@@ -117,6 +118,7 @@ def gen_case(starttime, data_track, wcnt=wcnt, window_func=cap_window_func, capw
             ampl = channel_ampls[feat]
             seq /= ampl
             spec = norm_fft(seq, window_func)
+
             spectrums.append(spec)
 
         measures.append(spectrums)
@@ -127,14 +129,6 @@ def process_file(filename: str):
     data_track = data[data["file_name"] == filename]
     X = []
     y = []
-
-    wtf = gen_case(0, data_track=data_track, wcnt=wcnt, window_func=cap_window_func, capwsz=capwsz,
-                            wshift=wshift)
-    print(wtf.shape)
-    for i in range(wtf.shape[1]):
-        plt.plot(wtf[0, i])
-    plt.show()
-    exit(0)
 
     for rpos in range(viewsz, len(data_track), capture_step):
         lpos = rpos - wsz
