@@ -21,7 +21,7 @@ wsz = period_size * window_period_cnt
 etal_sim_th = -1  # 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
 
 wcnt = 3  # number of spectrum recordings in generated data
-capwsz = wsz  # size of window of recordings
+capwsz = wsz // 2  # size of window of recordings
 wshift = capwsz // 2  # shift between recordings
 unmatched_channels_th = 3  # threshold which states the least number of unmatched channels for measure to be considered abnormal
 capture_step = 7  # step between recordings

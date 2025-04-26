@@ -1,4 +1,8 @@
+import random
+
 import torch
+from sklearn.decomposition import PCA
+from matplotlib import pyplot as plt
 from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau, ExponentialLR
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
@@ -10,6 +14,7 @@ from tqdm import tqdm
 
 test_ratio = 0.2  # test size / overall size
 device = "cuda"
+model_name = "simpleFC1"
 
 
 # Custom Dataset class
@@ -39,12 +44,14 @@ _, rec_cnt, feat_cnt, specsz_orig = X_full.shape
 specsz = specsz_orig // 2  # length of frequencies prefix to use from spectra
 X_full = X_full[:, :, :, : specsz]
 
-print(f"One sample consists of {rec_cnt} recordings, {feat_cnt} features, and {specsz} amplitudes.\n")
+print(f"One sample consists of {rec_cnt} recordings, {feat_cnt} features, and {specsz} / {specsz_orig} amplitudes.\n")
 
 X_train = X_full[:train_size]
 y_train = y_full[:train_size]
 X_val = X_full[train_size:]
 y_val = y_full[train_size:]
+
+print(f"Train / val size: {len(X_train)} / {len(X_val)}")
 
 # Model Settings
 spectrum_latent_size = 4
@@ -61,9 +68,9 @@ train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 
-class SimpleCNN(nn.Module):
+class SimpleFC1(nn.Module):
     def __init__(self):
-        super(SimpleCNN, self).__init__()
+        super(SimpleFC1, self).__init__()
 
         self.fcS1 = nn.Linear(in_features=specsz, out_features=16)
         self.fcS2 = nn.Linear(in_features=16, out_features=spectrum_latent_size)
@@ -121,58 +128,117 @@ class SimpleCNN(nn.Module):
         return reconstructed
 
 
-model = SimpleCNN().to(device)
+def train():
+    model = SimpleFC1().to(device)
+    # Define loss function and optimizer
+    criterion = nn.MSELoss()
+    # nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.0015)
+    scheduler1 = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=5, cooldown=10, min_lr=1e-5,
+                                   threshold=0.0002)
+    scheduler2 = ExponentialLR(optimizer, gamma=0.996)
+    # ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, cooldown=15, min_lr=1e-6)
 
-# Define loss function and optimizer
-criterion = nn.MSELoss()
-# nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=2, cooldown=15, min_lr=1e-6)
-# ExponentialLR(optimizer, gamma=0.995)
-# ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, cooldown=15, min_lr=1e-6)
+    # Training loop
+    num_epochs = 2
 
-# Training loop
-num_epochs = 300
+    best_val_loss = 1e18
+    best_model = None
+    for epoch in (range(num_epochs)):
+        train_loss = 0.0
+        model.train()
 
-for epoch in (range(num_epochs)):
-    train_loss = 0.0
-    model.train()
+        for batch_data, _ in train_dataloader:
+            # Convert numpy arrays to torch tensors
+            batch_data = batch_data.float()
 
-    for batch_data, _ in train_dataloader:
-        # Convert numpy arrays to torch tensors
-        batch_data = batch_data.float()
+            # Zero the parameter gradients
+            optimizer.zero_grad()
 
-        # Zero the parameter gradients
-        optimizer.zero_grad()
-
-        # Forward pass
-        # original = batch_data.detach().clone()
-        outputs = model(batch_data)
-        loss = criterion(outputs, batch_data)
-
-        # Backward pass and optimization
-        loss.backward()
-        optimizer.step()
-
-        train_loss += loss.item() * batch_data.shape[0]
-    train_loss /= len(train_dataloader.dataset)
-
-    scheduler.step(train_loss)
-
-    model.eval()
-    val_loss = 0.0
-    with torch.no_grad():
-        for batch_data, _ in val_dataloader:
-            batch_data = batch_data.float().to(device)
+            # Forward pass
+            # original = batch_data.detach().clone()
             outputs = model(batch_data)
             loss = criterion(outputs, batch_data)
-            val_loss += loss.item() * batch_data.size(0)
 
-        val_loss /= len(val_dataloader.dataset)
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
 
-    print(f"Epoch [{epoch + 1}/{num_epochs}] "
-          f"Train Loss: {train_loss:.6f}  "
-          f"Val Loss: {val_loss:.6f}  "
-          f"LR: {optimizer.param_groups[0]['lr']:.6f}")
+            train_loss += loss.item() * batch_data.shape[0]
+        train_loss /= len(train_dataloader.dataset)
 
-    # print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+        scheduler1.step(train_loss)
+        scheduler2.step()
+
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch_data, _ in val_dataloader:
+                batch_data = batch_data.float().to(device)
+                outputs = model(batch_data)
+                loss = criterion(outputs, batch_data)
+                val_loss += loss.item() * batch_data.size(0)
+
+            val_loss /= len(val_dataloader.dataset)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model = model.state_dict().copy()
+
+        print(f"Epoch [{epoch + 1}/{num_epochs}] "
+              f"Train Loss: {train_loss:.6f}  "
+              f"Val Loss: {val_loss:.6f}  "
+              f"LR: {optimizer.param_groups[0]['lr']:.6f}")
+
+        # print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+    torch.save(best_model, f"models/{model_name}_{round(val_loss, 4)}.pt")
+
+
+def visualize_spectrum(x):
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+
+
+
+def visualize_2d():
+    global X_val, y_val
+
+    model_name = "simpleFC1_0.0034.pt"
+
+    model = SimpleFC1().to(device)
+    model.load_state_dict(torch.load("models/" + model_name, weights_only=True))
+    model.to('cpu')
+    model.eval()
+
+    pt_num = X_val.shape[0]
+
+    X_val = X_val.to('cpu')
+    y_val = y_val.to('cpu')
+
+    # X_vis, y_vis = random.choices(list(zip(X_val, y_val)), k=pt_num)
+    X_vis, y_vis = X_val[:pt_num], y_val[:pt_num]
+    fig, ax = plt.subplots()
+    pts_raw = model.encode(X_vis).detach().cpu().numpy()
+
+    pca2D = PCA(n_components=2)
+    pts = pca2D.fit_transform(pts_raw)
+
+    ptx = [pt[0] for pt in pts]
+    pty = [pt[1] for pt in pts]
+
+    plt.title(f'Группировка точек модели {model_name}')
+    # plt.set_xlabel('X')
+    # plt.set_ylabel('Y')
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    # plt.grid(True)
+
+    plt.scatter(ptx, pty, c=y_vis, cmap='viridis')
+    plt.colorbar(label='Концентрация событий')
+    plt.show()
+    # for pt, y in zip(pts, y_vis):
+    #     print(pt, y)
+
+
+if __name__ == "__main__":
+    train()
+    visualize()
