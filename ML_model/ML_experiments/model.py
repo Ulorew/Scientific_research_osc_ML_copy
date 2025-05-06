@@ -68,6 +68,8 @@ train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 
+### MODEL
+
 class SimpleFC1(nn.Module):
     def __init__(self):
         super(SimpleFC1, self).__init__()
@@ -128,6 +130,8 @@ class SimpleFC1(nn.Module):
         return reconstructed
 
 
+### TRAINING
+
 def train():
     model = SimpleFC1().to(device)
     # Define loss function and optimizer
@@ -140,10 +144,10 @@ def train():
     # ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, cooldown=15, min_lr=1e-6)
 
     # Training loop
-    num_epochs = 2
+    num_epochs = 1
 
-    best_val_loss = 1e18
-    best_model = None
+    best_val_loss = 1
+    best_model = model
     for epoch in (range(num_epochs)):
         train_loss = 0.0
         model.train()
@@ -191,18 +195,46 @@ def train():
               f"LR: {optimizer.param_groups[0]['lr']:.6f}")
 
         # print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
-    torch.save(best_model, f"models/{model_name}_{round(val_loss, 4)}.pt")
+    torch.save(best_model, f"models/{model_name}_{round(best_val_loss, 4)}.pt")
 
 
-def visualize_spectrum(x):
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+# train()
 
+### ANALYTICS
+
+load_model_name = "simpleFC1_0.0035.pt"
+
+model = SimpleFC1().to(device)
+model.load_state_dict(torch.load("models/" + load_model_name, weights_only=True))
+model.to('cpu')
+model.eval()
+
+pt_num = X_val.shape[0]
+
+X_val = X_val.detach().cpu()
+y_val = y_val.detach().cpu()
+
+
+def visualize_spectrum(x, axs=None, draw_feats=[0], color="blue", linestyle='-'):
+    if axs is None:
+        fig, axs = plt.subplots(1, 3, figsize=(12, 8))
+    for ax, rec in zip(axs, x):
+        for feat in draw_feats:
+            ax.plot(rec[feat], color=color, linestyle=linestyle)
+    return axs
+
+
+def visualize_reconstruction(x, draw_feats=[0]):
+    fig, axs = plt.subplots(1, 3, figsize=(12, 8))
+    x_rec = model(x.unsqueeze(0)).squeeze()
+    visualize_spectrum(x, axs=axs, draw_feats=draw_feats)
+    visualize_spectrum(x_rec.detach().numpy(), axs=axs, draw_feats=draw_feats, color='red', linestyle='--')
 
 
 def visualize_2d():
     global X_val, y_val
 
-    model_name = "simpleFC1_0.0034.pt"
+    model_name = "simpleFC1_0.0035.pt"
 
     model = SimpleFC1().to(device)
     model.load_state_dict(torch.load("models/" + model_name, weights_only=True))
@@ -239,6 +271,7 @@ def visualize_2d():
     #     print(pt, y)
 
 
-if __name__ == "__main__":
-    train()
-    visualize()
+# if __name__ == "__main__":
+# train()
+visualize_2d()
+
