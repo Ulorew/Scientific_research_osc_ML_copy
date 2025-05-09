@@ -14,7 +14,6 @@ from tqdm import tqdm
 
 test_ratio = 0.2  # test size / overall size
 device = "cuda"
-model_name = "simpleFC1"
 
 
 # Custom Dataset class
@@ -33,7 +32,7 @@ class CustomDataset(Dataset):
 
 
 # Prepare data
-data_path = "../../Data/OscData2"
+data_path = "../../Data/OscData_spec_1_1"
 X_full = torch.load(data_path + "_X.pt").to(device)
 y_full = torch.load(data_path + "_y.pt").to(device)
 full_size = X_full.shape[0]
@@ -54,9 +53,9 @@ y_val = y_full[train_size:]
 print(f"Train / val size: {len(X_train)} / {len(X_val)}")
 
 # Model Settings
-spectrum_latent_size = 4
+spectrum_latent_size = 8
 recording_latent_size = 8
-main_latent_size = 8
+main_latent_size = 32
 batch_size = 1024
 
 # Create Dataset
@@ -71,6 +70,8 @@ val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 ### MODEL
 
 class SimpleFC1(nn.Module):
+    model_name = "SimpleFC1"
+
     def __init__(self):
         super(SimpleFC1, self).__init__()
 
@@ -127,6 +128,43 @@ class SimpleFC1(nn.Module):
     def forward(self, x):
         latent = self.encode(x)
         reconstructed = self.decode(latent)
+        return reconstructed  #
+
+
+class SimpleFC2(nn.Module):  # single spectrum reconstruction
+    model_name = "SimpleFC2"
+    activation_func=torch.nn.SiLU()
+
+    def __init__(self):
+        super(SimpleFC2, self).__init__()
+
+        self.fc1 = nn.Linear(in_features=specsz, out_features=32)
+        self.fc2 = nn.Linear(in_features=32, out_features=32)
+        self.fc3 = nn.Linear(in_features=32, out_features=main_latent_size)
+
+        self.rfc1 = nn.Linear(in_features=main_latent_size, out_features=32)
+        self.rfc2 = nn.Linear(in_features=32, out_features=32)
+        self.rfc3 = nn.Linear(in_features=32, out_features=specsz)
+
+    def encode(self, x):
+        cur_batch_size = x.shape[0]
+        x = self.activation_func(self.fc1(x))
+        x = self.activation_func(self.fc2(x))
+        x = self.activation_func(self.fc3(x))
+        x = x.reshape(cur_batch_size, main_latent_size)
+        return x
+
+    def decode(self, x):
+        cur_batch_size = x.shape[0]
+        x = x.reshape(cur_batch_size, 1, 1, main_latent_size)
+        x = self.activation_func(self.rfc1(x))
+        x = self.activation_func(self.rfc2(x))
+        x = self.activation_func(self.rfc3(x))
+        return x
+
+    def forward(self, x):
+        latent = self.encode(x)
+        reconstructed = self.decode(latent)
         return reconstructed
 
 
@@ -160,24 +198,26 @@ class EarlyStopping:
 
 
 def train():
-    model = SimpleFC1().to(device)
+    model = SimpleFC2().to(device)
+    model_name = model.model_name
     # Define loss function and optimizer
     criterion = nn.MSELoss()
+    #criterion=nn.L1Loss()
     # nn.CrossEntropyLoss()
 
-    # optimizer = optim.LBFGS(model.parameters(), lr=0.001, max_iter=500)
-    optimizer = optim.Adam(model.parameters(), lr=0.0015)
-    scheduler1 = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=2, cooldown=10, min_lr=1e-5,
-                                   threshold=0.0001)
-    scheduler2 = ExponentialLR(optimizer, gamma=0.998)
-    # scheduler2 = ExponentialLR(optimizer, gamma=0.6)
+    #optimizer = optim.LBFGS(model.parameters(), lr=0.2, max_iter=50)
+    optimizer = optim.Adam(model.parameters(), lr=0.0002)
+    scheduler1 = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=3, cooldown=10, min_lr=1e-5,
+                                   threshold=0.00001)
+    scheduler2 = ExponentialLR(optimizer, gamma=0.996)
+    #scheduler2 = ExponentialLR(optimizer, gamma=0.8)
 
     # Training loop
-    num_epochs = 200
+    num_epochs = 5000
 
     best_val_loss = 1
     best_model = model
-    early_stopping = EarlyStopping(patience=10, delta=0.000001)
+    early_stopping = EarlyStopping(patience=50, delta=0.000001)
 
     for epoch in (range(num_epochs)):
         train_loss = 0.0
@@ -193,7 +233,7 @@ def train():
             # Forward pass
             # original = batch_data.detach().clone()
             outputs = model(batch_data)
-            loss = criterion(outputs, batch_data[:, 2, :, :])  # compare only the last window
+            loss = criterion(outputs, batch_data)
 
             # Backward pass and optimization
             loss.backward()
@@ -201,12 +241,12 @@ def train():
             def closure():
                 optimizer.zero_grad()
                 outputs_ = model(batch_data)
-                loss_ = criterion(outputs_, batch_data[:, 2, :, :])
+                loss_ = criterion(outputs_, batch_data)
                 loss_.backward()
                 return loss_
 
-            # optimizer.step(closure)
-            optimizer.step()
+            optimizer.step(closure)
+            # optimizer.step()
 
             train_loss += loss.item() * batch_data.shape[0]
 
@@ -250,9 +290,9 @@ def train():
 
 ### ANALYTICS
 
-load_model_name = "simpleFC1_0.0051.pt"
+load_model_name = "simpleFC2_0.0032.pt"
 
-model = SimpleFC1().to(device)
+model = SimpleFC2().to(device)
 model.load_state_dict(torch.load("models/" + load_model_name, weights_only=True))
 model.to('cpu')
 model.eval()
@@ -276,17 +316,21 @@ def visualize_spectrum(x, axs=None, draw_feats=[0], color="blue", linestyle='-',
 
 
 def visualize_reconstruction(x, draw_feats=[0]):
-    fig, axs = plt.subplots(1, 3, figsize=(12, 8))
+    fig, axs = plt.subplots(1, rec_cnt, figsize=(12, 8))
+    if rec_cnt == 1:
+        axs = [axs]
+    for ax in axs:
+        ax.set_ylim([0, 1])
     x_rec = model(x.unsqueeze(0)).squeeze(0)  # treat batch dim as rec dim
     visualize_spectrum(x, axs=axs, draw_feats=draw_feats, label="orig")
-    visualize_spectrum(x_rec.detach().numpy(), axs=axs[2:3], draw_feats=draw_feats, color='red', linestyle='--',
+    visualize_spectrum(x_rec.detach().numpy(), axs=axs, draw_feats=draw_feats, color='red', linestyle='--',
                        label="rec")
 
 
 def visualize_2d():
     global X_val, y_val
 
-    model = SimpleFC1().to(device)
+    model = SimpleFC2().to(device)
     model.load_state_dict(torch.load("models/" + load_model_name, weights_only=True))
     model.to('cpu')
     model.eval()
@@ -307,7 +351,7 @@ def visualize_2d():
     ptx = [pt[0] for pt in pts]
     pty = [pt[1] for pt in pts]
 
-    plt.title(f'Группировка точек модели {model_name}')
+    plt.title(f'Группировка точек модели {load_model_name}')
     # plt.set_xlabel('X')
     # plt.set_ylabel('Y')
     plt.xlabel('X')
@@ -323,7 +367,7 @@ def visualize_2d():
 
 # if __name__ == "__main__":
 
-#visualize_2d()
-for l in range(200, 220, 5):
+visualize_2d()
+for l in range(00, 20, 5):
     visualize_reconstruction(X_val[l])
 plt.show()
