@@ -1,5 +1,6 @@
 import math
 import time
+from turtledemo.penrose import start
 
 import torch
 import numpy as np
@@ -16,17 +17,13 @@ from collections import defaultdict
 period_size = 32
 window_period_cnt = 8
 wsz = period_size * window_period_cnt
-etal_sim_th = 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
+etal_sim_th = -1# 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
 unmatched_channels_th = 3  # threshold which states the least number of unmatched channels for measure to be considered abnormal
 
-cap_wcnt = 1  # number of spectrum recordings in generated data
-cap_wsz = wsz // 2  # size of window of recordings
-cap_wshift = cap_wsz // 2  # shift between recordings
-capture_step = 7  # step between recordings
+cap_wsz = period_size * 8  # size of window of recordings
+capture_step = 13  # step between recordings
 adjust_ampl_factor = 2  # features from adjust_ampl_feats have adaptive amplitude scale from 1/fac to fac
 
-viewsz = cap_wsz + cap_wshift * (cap_wcnt - 1)
-lpadding = (viewsz - wsz)
 feats = ["UA BB", "UB BB", "UC BB"]  # ["IA", "IC", "UA BB", "UB BB", "UC BB"]  # , "UN BB"
 adjust_ampl_feats = {"IA", "IC"}  # "UN BB"
 x_fft = fft.rfftfreq(wsz, 1.0 / period_size)
@@ -36,10 +33,10 @@ window_func = np.hanning(wsz)
 cap_window_func = np.hanning(cap_wsz)
 window_func /= np.sqrt(np.average(window_func ** 2))
 cap_window_func /= np.sqrt(np.average(cap_window_func ** 2))
-cap_feats = ["UA BB"]
+cap_feats = ["UA BB", "UB BB", "UC BB"]
 
 dataset_path = "../../Data/OscData2.csv"
-save_path = f"../../Data/OscData_spec_{cap_wcnt}_{len(cap_feats)}"
+save_path = f"../../Data/OscData_raw_{cap_wsz}_{len(cap_feats)}"
 
 channel_ampls = defaultdict(lambda: 1, {
     "IA": 1,
@@ -104,28 +101,24 @@ def match_etal(lpos, data_track, wsz=wsz, window_func=window_func):
     return nomatch
 
 
-def gen_case(starttime, data_track, wcnt=cap_wcnt, window_func=cap_window_func, feats=cap_feats, capwsz=cap_wsz,
-             wshift=cap_wshift):
+def gen_case(starttime, data_track, window_func=cap_window_func, feats=cap_feats, capwsz=cap_wsz):
     measures = []
 
-    for lpos in range(starttime, starttime + wshift * wcnt, wshift):
-        rpos = lpos + capwsz
-        if lpos < 0 or rpos >= len(data):
-            raise IndexError("Wrong time interval for case generation")
+    lpos = starttime
+    rpos = lpos + capwsz
+    if lpos < 0 or rpos >= len(data):
+        raise IndexError("Wrong time interval for case generation")
 
-        seq_trim = data_track[lpos:lpos + capwsz]
-        spectrums = []
+    seq_trim = data_track[lpos:lpos + capwsz]
 
-        for feat in feats:
-            seq = seq_trim[feat].values.copy()
-            ampl = channel_ampls[feat]
-            seq /= ampl
-            spec = norm_fft(seq, window_func)
+    tracks = []
 
-            spectrums.append(spec)
+    for feat in feats:
+        seq = seq_trim[feat].values.copy()
+        seq/=channel_ampls[feat]
+        tracks.append(seq)
 
-        measures.append(spectrums)
-    return np.array(measures)
+    return np.array(tracks)
 
 
 def process_file(filename: str):
@@ -133,17 +126,17 @@ def process_file(filename: str):
     X = []
     y = []
 
-    for rpos in range(max(viewsz, wsz), len(data_track), capture_step):
+    for rpos in range(max(cap_wsz, wsz), len(data_track), capture_step):
         lpos = rpos - wsz
         nomatch = match_etal(lpos, data_track=data_track, window_func=window_func)
 
-        cap_lpos = rpos - viewsz
+        cap_lpos = rpos - cap_wsz
 
         if len(nomatch) >= unmatched_channels_th:
             X.append(
-                gen_case(cap_lpos, data_track=data_track, wcnt=cap_wcnt, window_func=cap_window_func, feats=cap_feats,
-                         capwsz=cap_wsz,
-                         wshift=cap_wshift))
+                gen_case(cap_lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats,
+                         capwsz=cap_wsz))
+
             events = data_track[op_names[:3]][lpos:rpos]
             y.append(events.mean().mean())
 
@@ -160,7 +153,7 @@ data[op_names] = data[op_names].fillna(value=0)
 data.dropna(axis=1, how='any', inplace=True)
 files = np.unique(data["file_name"].values)
 
-X, y = np.ndarray((0, cap_wcnt, len(cap_feats), (cap_wsz // 2) + 1)), np.array([])
+X, y = np.ndarray((0, len(cap_feats), cap_wsz)), np.array([])
 
 for filename in tqdm(files):
     # filename="b629f3bb07ef79f5845c27daa0a83425_Bus 2 _event N1"
