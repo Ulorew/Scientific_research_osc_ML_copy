@@ -17,7 +17,7 @@ from collections import defaultdict
 period_size = 32
 window_period_cnt = 8
 wsz = period_size * window_period_cnt
-etal_sim_th = -1# 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
+etal_sim_th = -1  # 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
 unmatched_channels_th = 3  # threshold which states the least number of unmatched channels for measure to be considered abnormal
 
 cap_wsz = period_size * 8  # size of window of recordings
@@ -115,7 +115,7 @@ def gen_case(starttime, data_track, window_func=cap_window_func, feats=cap_feats
 
     for feat in feats:
         seq = seq_trim[feat].values.copy()
-        seq/=channel_ampls[feat]
+        seq /= channel_ampls[feat]
         tracks.append(seq)
 
     return np.array(tracks)
@@ -147,30 +147,31 @@ def process_file(filename: str):
     return X, y
 
 
-data = pd.read_csv(dataset_path)
-data[op_names] = data[op_names].fillna(value=0)
-# data.fillna({"IB": 0}, inplace=True)
-data.dropna(axis=1, how='any', inplace=True)
-files = np.unique(data["file_name"].values)
+if __name__ == "__main__":
+    data = pd.read_csv(dataset_path)
+    data[op_names] = data[op_names].fillna(value=0)
+    # data.fillna({"IB": 0}, inplace=True)
+    data.dropna(axis=1, how='any', inplace=True)
+    files = np.unique(data["file_name"].values)
 
-X, y = np.ndarray((0, len(cap_feats), cap_wsz)), np.array([])
+    X, y = np.ndarray((0, len(cap_feats), cap_wsz)), np.array([])
 
-for filename in tqdm(files):
-    # filename="b629f3bb07ef79f5845c27daa0a83425_Bus 2 _event N1"
-    # print(f"Working with file {filename}")
-    tX, ty = process_file(filename)
-    if len(tX) == 0:
-        continue
-    X = np.append(X, tX, axis=0)
-    y = np.append(y, ty, axis=0)
-    # break
+    for filename in tqdm(files):
+        # filename="b629f3bb07ef79f5845c27daa0a83425_Bus 2 _event N1"
+        # print(f"Working with file {filename}")
+        tX, ty = process_file(filename)
+        if len(tX) == 0:
+            continue
+        X = np.append(X, tX, axis=0)
+        y = np.append(y, ty, axis=0)
+        # break
 
-print(f"Done! Event rate: {y.mean()}")
-print(f"Total cases: {len(y)}")
+    print(f"Done! Event rate: {y.mean()}")
+    print(f"Total cases: {len(y)}")
 
-X = torch.from_numpy(X).float()
-y = torch.from_numpy(y).float()
+    X = torch.from_numpy(X).float()
+    y = torch.from_numpy(y).float()
 
-torch.save(X, save_path + "_X.pt")
-torch.save(y, save_path + "_y.pt")
-print(f"Saved as {save_path}_*.pt")
+    torch.save(X, save_path + "_X.pt")
+    torch.save(y, save_path + "_y.pt")
+    print(f"Saved as {save_path}_*.pt")
