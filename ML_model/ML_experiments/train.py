@@ -17,19 +17,19 @@ from ML_model.ML_experiments.model import CustomRaw2
 
 data_review()
 # ------------- параметры эксперимента -------------
-latent_dims = [16]
-# conv_size_patterns = [[4, 8, 4], [4, 4, 4]]
-# fc_size_patterns = [[], [1], [1, 1], [2, 1]]
-# conv_size_scales = [1, 2]
-# fc_size_scales = [1, 2]
-conv_size_patterns = [[4, 4, 4]]
-fc_size_patterns = [[]]
-conv_size_scales = [1]
+latent_dims = [2, 4, 8]
+
+conv_size_patterns = [[], [2, 2], [2, 2, 2]]
+conv_size_scales = [2, 4]
+
+fc_size_patterns = [[], [1], [1, 1]]
 fc_size_scales = [1]
 
+ker_size = [5]
+
 param_window = (1, 999999)  # допустимый диапазон кол-ва параметров
-num_runs = 10
-kernel_size = 5
+num_runs = 1
+optim_iter = 50
 device = 'cuda'  # или 'cpu'
 
 timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -65,16 +65,25 @@ class EarlyStopping:
 
 # TODO: Custom lr schedule 0.1 0.1 0.1 -> 1->0.995
 
+def event_weight_corr(ys):
+    return torch.ones_like(ys)  # (ys ** 2) * 0.1
+
 
 def train(model, verbose: bool = True):
+    def weightedMSE(X1, X2, weights):
+        return nn.MSELoss()(X1, X2)
+        pre = (X1 - X2) ** 2
+        w2 = weights.unsqueeze(1).unsqueeze(2)
+        return torch.sum((pre * w2)) / (X1.numel())
+
     model_name = model.model_name
     # Define loss function and optimizer
-    criterion = nn.MSELoss()
+    criterion = weightedMSE
     time_start = time.time()
     # criterion=nn.L1Loss()
     # nn.CrossEntropyLoss()
 
-    optimizer = optim.LBFGS(model.parameters(), lr=np.random.uniform(0.05, 0.3), max_iter=100)
+    optimizer = optim.LBFGS(model.parameters(), lr=np.random.uniform(0.05, 0.3), max_iter=optim_iter)
     # optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler1 = ReduceLROnPlateau(optimizer=optimizer, factor=0.5, patience=53535, cooldown=10, min_lr=1e-5,
                                    threshold=0.00001)
@@ -82,7 +91,7 @@ def train(model, verbose: bool = True):
     scheduler2 = ExponentialLR(optimizer, gamma=np.random.uniform(0.96, 0.98))
 
     # Training loop
-    num_epochs = 50
+    num_epochs = 100
 
     best_val_loss = 1e9
     best_weights = model
@@ -92,7 +101,7 @@ def train(model, verbose: bool = True):
         train_loss = 0.0
         model.train()
 
-        for batch_data, _ in train_dataloader:
+        for batch_data, ys in train_dataloader:
             # Convert numpy arrays to torch tensors
             batch_data = batch_data.float()
 
@@ -102,7 +111,7 @@ def train(model, verbose: bool = True):
             # Forward pass
             # original = batch_data.detach().clone()
             outputs = model(batch_data)
-            loss = criterion(outputs, batch_data)
+            loss = criterion(outputs, batch_data, ys)
 
             # Backward pass and optimization
             loss.backward()
@@ -110,7 +119,7 @@ def train(model, verbose: bool = True):
             def closure():
                 optimizer.zero_grad()
                 outputs_ = model(batch_data)
-                loss_ = criterion(outputs_, batch_data)
+                loss_ = criterion(outputs_, batch_data, ys)
                 loss_.backward()
                 return loss_
 
@@ -121,16 +130,16 @@ def train(model, verbose: bool = True):
 
         train_loss /= len(train_dataloader.dataset)
 
-        scheduler1.step(train_loss)
-        scheduler2.step()
+        # scheduler1.step(train_loss)
+        # scheduler2.step()
 
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch_data, _ in val_dataloader:
+            for batch_data, ys in val_dataloader:
                 batch_data = batch_data.float().to(device)
                 outputs = model(batch_data)
-                loss = criterion(outputs, batch_data)
+                loss = criterion(outputs, batch_data, ys)
                 val_loss += loss.item() * batch_data.size(0)
 
             val_loss /= len(val_dataloader.dataset)
@@ -169,21 +178,21 @@ def train(model, verbose: bool = True):
 
 # ------------- вспомогательные функции -------------
 
-def single_config_run(latent_dim, conv_size_pattern, fc_size_pattern, conv_size_scale, fc_size_scale):
+def single_config_run(latent_dim, ker_size, conv_sizes, fc_sizes):
     """
     Для одной комбинации параметров:
       - проверяет число параметров
       - если OK, выполняет num_runs запусков train()
       - возвращает список словарей с результатами
     """
-    conv_sizes = (np.array(conv_size_pattern) * conv_size_scale).astype(int).tolist()
-    fc_sizes = (np.array(fc_size_pattern) * latent_dim * fc_size_scale).astype(int).tolist()
 
     # считаем кол-во параметров
     model = CustomRaw2(latent_dim=latent_dim,
                        conv_sizes=conv_sizes,
                        fc_sizes=fc_sizes,
-                       kernel_size=kernel_size).to(device)
+                       input_channels=num_channels,
+                       input_length=wsz,
+                       kernel_size=ker_size).to(device)
     param_cnt = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if not (param_window[0] <= param_cnt <= param_window[1]):
         return []  # пропускаем эту конфигурацию
@@ -191,12 +200,16 @@ def single_config_run(latent_dim, conv_size_pattern, fc_size_pattern, conv_size_
     best_loss = float('inf')
     losses = []
 
+    print(f"Starting training of {model.model_name}, params: {param_cnt}")
+
     for run_idx in range(num_runs):
         model = CustomRaw2(latent_dim=latent_dim,
                            conv_sizes=conv_sizes,
                            fc_sizes=fc_sizes,
-                           kernel_size=kernel_size).to(device)
-        cur_loss, _ = train(model=model, verbose=False)
+                           input_channels=num_channels,
+                           input_length=wsz,
+                           kernel_size=ker_size).to(device)
+        cur_loss, _ = train(model=model, verbose=True)
         if not math.isnan(cur_loss):
             losses.append(cur_loss)
             best_loss = min(best_loss, cur_loss)
@@ -204,6 +217,7 @@ def single_config_run(latent_dim, conv_size_pattern, fc_size_pattern, conv_size_
     avg_loss = sum(losses) / len(losses) if losses else float('nan')
 
     return {
+        "ker_size": ker_size,
         "latent_dim": latent_dim,
         "conv_sizes": conv_sizes,
         "fc_sizes": fc_sizes,
@@ -218,17 +232,24 @@ def single_config_run(latent_dim, conv_size_pattern, fc_size_pattern, conv_size_
 if __name__ == "__main__":
     print(f"Saving stats to {out_csv}")
     # подготавливаем CSV, пишем заголовок
-    fieldnames = ["latent_dim", "conv_sizes", "fc_sizes", "param_cnt", "best_loss", "avg_loss"]
-    configs = list(
-        itertools.product(latent_dims, conv_size_patterns, fc_size_patterns, conv_size_scales, fc_size_scales))
-    configs=[conf for conf in configs if (conf[2]!=[] or conf[3]==fc_size_scales[0])]
+    fieldnames = ["latent_dim", "ker_size", "conv_sizes", "fc_sizes", "param_cnt", "best_loss", "avg_loss"]
+    configs_pre = list(
+        itertools.product(latent_dims, ker_size, conv_size_patterns, fc_size_patterns, conv_size_scales,
+                          fc_size_scales))
+    configs = []
+    for latent_dim, ker_sz, conv_size_pattern, fc_size_pattern, conv_size_scale, fc_size_scale in configs_pre:
+        conv_sizes = (np.array(conv_size_pattern) * conv_size_scale).astype(int).tolist()
+        fc_sizes = (np.array(fc_size_pattern) * latent_dim * fc_size_scale).astype(int).tolist()
+        cand = (latent_dim, ker_sz, conv_sizes, fc_sizes)
+        if cand not in configs:
+            configs.append(cand)
 
     with open(out_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-        for latent_dim, conv_pattern, fc_pattern, conv_scale, fc_scale in tqdm(configs):
-            res = single_config_run(latent_dim, conv_pattern, fc_pattern, conv_scale, fc_scale)
+        for latent_dim, ker_size, conv_sizes, fc_sizes in tqdm(configs):
+            res = single_config_run(latent_dim, ker_size, conv_sizes, fc_sizes)
 
             writer.writerow(res)
             # можно сразу сбрасывать на диск

@@ -15,12 +15,12 @@ from collections import defaultdict
 
 # dataset_path = "../../Data/datset_v1.csv"
 period_size = 32
-window_period_cnt = 8
+window_period_cnt = 4
 wsz = period_size * window_period_cnt
 etal_sim_th = -1  # 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
 unmatched_channels_th = 3  # threshold which states the least number of unmatched channels for measure to be considered abnormal
 
-cap_wsz = period_size * 8  # size of window of recordings
+cap_wsz = wsz  # size of window of recordings
 capture_step = 13  # step between recordings
 adjust_ampl_factor = 2  # features from adjust_ampl_feats have adaptive amplitude scale from 1/fac to fac
 
@@ -34,14 +34,13 @@ cap_window_func = np.hanning(cap_wsz)
 window_func /= np.sqrt(np.average(window_func ** 2))
 cap_window_func /= np.sqrt(np.average(cap_window_func ** 2))
 cap_feats = ["UA BB", "UB BB", "UC BB"]
+pivot_channel = "UA BB"
 
 dataset_path = "../../Data/OscData2.csv"
 save_path = f"../../Data/OscData_raw_{cap_wsz}_{len(cap_feats)}"
 
 channel_ampls = defaultdict(lambda: 1, {
-    "IA": 1,
-    "IB": 1,
-    "IC": 1,
+
     "UA BB": 84.5,
     "UB BB": 84.5,
     "UC BB": 84.5,
@@ -101,15 +100,15 @@ def match_etal(lpos, data_track, wsz=wsz, window_func=window_func):
     return nomatch
 
 
-def gen_case(starttime, data_track, window_func=cap_window_func, feats=cap_feats, capwsz=cap_wsz):
+def gen_case(starttime, data_track, window_func=cap_window_func, feats=cap_feats, cap_wsz=cap_wsz):
     measures = []
 
     lpos = starttime
-    rpos = lpos + capwsz
+    rpos = lpos + cap_wsz
     if lpos < 0 or rpos >= len(data):
         raise IndexError("Wrong time interval for case generation")
 
-    seq_trim = data_track[lpos:lpos + capwsz]
+    seq_trim = data_track[lpos:lpos + cap_wsz]
 
     tracks = []
 
@@ -121,26 +120,62 @@ def gen_case(starttime, data_track, window_func=cap_window_func, feats=cap_feats
     return np.array(tracks)
 
 
+def find_near_period(seq, st_pos: int, ampl: float, max_steps: int, quit_on_miss: bool = True):
+    def val_norm(x):
+        return x
+        # return abs(x)
+
+    if st_pos >= len(seq):
+        return st_pos
+    ampl_th = ampl * 0.5
+    if val_norm(seq[st_pos]) < ampl_th and quit_on_miss:
+        return st_pos
+    pos = st_pos
+    for step in range(max_steps):
+        vl = val_norm(seq[pos - 1]) if pos > 0 else -1e9
+        vm = val_norm(seq[pos])
+        vr = val_norm(seq[pos + 1]) if pos + 1 < len(seq) else -1e9
+
+        if vl < vm > vr:
+            return pos
+        if vl > vr:
+            pos -= 1
+        else:
+            pos += 1
+    return pos
+
+
 def process_file(filename: str):
     data_track = data[data["file_name"] == filename]
+    pivot_seq = data_track[pivot_channel].values
     X = []
     y = []
 
-    for rpos in range(max(cap_wsz, wsz), len(data_track), capture_step):
-        lpos = rpos - wsz
-        nomatch = match_etal(lpos, data_track=data_track, window_func=window_func)
+    lpos = find_near_period(pivot_seq, period_size // 2 + 3, channel_ampls[pivot_channel], max_steps=period_size * 2,
+                            quit_on_miss=False)
+    while lpos + cap_wsz <= len(data_track):
+        X.append(
+            gen_case(lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats))
+        events = data_track[op_names[:3]][lpos:lpos + cap_wsz]
+        y.append(events.mean().mean())
+        lpos = find_near_period(pivot_seq, lpos + (period_size), channel_ampls[pivot_channel],
+                                max_steps=3)
 
-        cap_lpos = rpos - cap_wsz
-
-        if len(nomatch) >= unmatched_channels_th:
-            X.append(
-                gen_case(cap_lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats,
-                         capwsz=cap_wsz))
-
-            events = data_track[op_names[:3]][lpos:rpos]
-            y.append(events.mean().mean())
-
-        # print(lpos, nomatch)
+    # for rpos in range(max(cap_wsz, wsz), len(data_track), capture_step):
+    #     lpos = rpos - wsz
+    #     nomatch = match_etal(lpos, data_track=data_track, window_func=window_func)
+    #
+    #     cap_lpos = rpos - cap_wsz
+    #
+    #     # if len(nomatch) >= unmatched_channels_th:
+    #     #     X.append(
+    #     #         gen_case(cap_lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats,
+    #     #                  capwsz=cap_wsz))
+    #     #
+    #     #     events = data_track[op_names[:3]][lpos:rpos]
+    #     #     y.append(events.mean().mean())
+    #
+    #     # print(lpos, nomatch)
 
     X = np.array(X)
     y = np.array(y)
@@ -153,6 +188,7 @@ if __name__ == "__main__":
     # data.fillna({"IB": 0}, inplace=True)
     data.dropna(axis=1, how='any', inplace=True)
     files = np.unique(data["file_name"].values)
+    # np.random.shuffle(files)
 
     X, y = np.ndarray((0, len(cap_feats), cap_wsz)), np.array([])
 

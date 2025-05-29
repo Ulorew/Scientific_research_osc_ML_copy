@@ -25,9 +25,6 @@ class CustomDataset(Dataset):
         return sample, label
 
 
-
-
-
 class CustomRaw1(nn.Module):  # single spectrum reconstruction
     def __init__(self, latent_dim, conv_sizes=[8, 16, 32]):
         super(CustomRaw1, self).__init__()
@@ -97,13 +94,13 @@ class CustomRaw1(nn.Module):  # single spectrum reconstruction
 class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic layers
     def __init__(self,
                  latent_dim: int,
-                 conv_sizes: list = [8, 16, 32],
-                 fc_sizes: list = [],
-                 input_channels: int = 3,
-                 input_length: int = 256,
+                 conv_sizes: list,
+                 fc_sizes: list,
+                 input_channels: int,
+                 input_length: int,
                  kernel_size: int = 5):
         super(CustomRaw2, self).__init__()
-        self.model_name = f"CustomRaw2_lat{latent_dim}_conv{conv_sizes}_fc{fc_sizes}"
+        self.model_name = f"CustomRaw2_input{input_channels}x{input_length}_lat{latent_dim}_conv{conv_sizes}_fc{fc_sizes}_ker{kernel_size}"
 
         # --- Build Encoder conv layers dynamically ---
         conv_layers = []
@@ -146,21 +143,22 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
 
         # --- Build Decoder conv layers dynamically ---
         deconv_layers = [nn.Unflatten(1, self._conv_shape)]
-        in_ch = self._conv_shape[0]
-        rev_conv = list(reversed(conv_sizes))
-        for idx, out_ch in enumerate(list(reversed([input_channels] + rev_conv[:-1]))):
-            deconv_layers += [
-                nn.Upsample(scale_factor=2, mode='nearest'),
-                nn.Conv1d(in_channels=in_ch, out_channels=out_ch,
-                          kernel_size=kernel_size, padding=kernel_size // 2)
-            ]
-            # add activation+bn except last
-            if idx < len(rev_conv) - 1:
+        if conv_sizes:
+            in_ch = self._conv_shape[0]
+            rev_conv = list(reversed(conv_sizes))
+            for idx, out_ch in enumerate(rev_conv[:-1] + [input_channels]):
                 deconv_layers += [
-                    nn.BatchNorm1d(out_ch),
-                    nn.ReLU(True)
+                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    nn.Conv1d(in_channels=in_ch, out_channels=out_ch,
+                              kernel_size=kernel_size, padding=kernel_size // 2)
                 ]
-            in_ch = out_ch
+                # add activation+bn except last
+                if idx < len(rev_conv) - 1:
+                    deconv_layers += [
+                        nn.BatchNorm1d(out_ch),
+                        nn.ReLU(True)
+                    ]
+                in_ch = out_ch
         self.decoder_conv = nn.Sequential(*deconv_layers)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
@@ -212,32 +210,6 @@ def multi_train_analytics(filepath: str):
     plt.ylim((0, torch.max(losses)))
     plt.show()
 
-
-
 # multi_train_analytics("stats/losses_0.0038.pt")
 
 ### ANALYTICS
-
-
-
-
-
-
-if __name__ == "__main__":
-    multi_train(5, verbose=True)
-    load_model_name = "SimpleRaw1_lat16_conv4_0.004.pt"
-
-    model = CustomRaw1(latent_dim=16).to(device)
-    model.load_state_dict(torch.load("models/" + load_model_name, weights_only=True))
-    model.to('cpu')
-    model.eval()
-
-    pt_num = X_val.shape[0]
-
-    X_val = X_val.detach().cpu()
-    y_val = y_val.detach().cpu()
-    visualize_3d_plotly()
-
-    for l in range(60, 95, 4):
-        visualize_reconstruction(X_val[l])
-    plt.show()
