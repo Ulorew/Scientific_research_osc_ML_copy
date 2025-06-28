@@ -1,18 +1,15 @@
+from contextlib import redirect_stdout, redirect_stderr
+
 import pandas as pd
 import plotly.express as px
-import torch
 from matplotlib import pyplot as plt
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from contextlib import redirect_stdout, redirect_stderr
 from sklearn.manifold import TSNE
-from sympy import false
 from torchmetrics.functional.text import perplexity
-
+from sklearn.cluster import DBSCAN
+from ML_model.ML_experiments.model import CustomRaw2
 from dataset import *
-
-from ML_model.ML_experiments.model import CustomRaw1, CustomRaw2
-import plotly.io as pio
-import plotly.offline as pyo
 
 
 # pio.renderers.default = "notebook"
@@ -42,7 +39,7 @@ def visualize_wave(x, axs=None, draw_feats=[0], color="blue", linestyle='-', lab
     return axs
 
 
-def visualize_reconstruction(x, draw_feats=[0]):
+def visualize_reconstruction(x, title: str = "", draw_feats=[0]):
     fig, axs = plt.subplots(1, len(draw_feats), figsize=(12, 8))
     if len(draw_feats) == 1:
         axs = [axs]
@@ -53,7 +50,7 @@ def visualize_reconstruction(x, draw_feats=[0]):
     visualize_wave(x_rec.detach().numpy(), axs=axs, draw_feats=draw_feats, color='red',
                    label="rec")
     visualize_wave(x, axs=axs, draw_feats=draw_feats, label="orig", linestyle='--')
-    ax.set_title(f"MSE: {((x_rec - x) ** 2).mean()}")
+    ax.set_title(f"{title} MSE: {((x_rec - x) ** 2).mean()}")
 
 
 def visualize_2d():
@@ -88,70 +85,159 @@ def visualize_2d():
     # for pt, y in zip(pts, y_vis):
     #     print(pt, y)
 
-
-def visualize_3d_plotly(show_pca: bool = True, show_sne: bool = False, perplexity: int = 30):
-    global X_val, y_val
-
+def visualize_2d_plotly(show_pca: bool = True, show_sne: bool = False, perplexity: int = 30,
+                        colors: list[str] = ["event_density"]):
     pt_num = X_full.shape[0]
     X_vis, y_vis = X_full[:pt_num].to('cpu'), y_full[:pt_num].to('cpu')
 
-    pts_raw = model.encode(X_vis).detach().cpu().numpy()
+    lat_raw = model.encode(X_vis).detach().cpu().numpy()
+    kmeans = KMeans(n_clusters=8, random_state=42)
+    # clusters = kmeans.fit_predict(lat_raw)
+    clusters = DBSCAN(eps=0.2, min_samples=10).fit_predict(lat_raw)
+
+    # cntr = [0 for i in range(100)]
+    #
+    # for id, cl in enumerate(clusters):
+    #     if cntr[cl] < 15 and (np.random.random() < 0.1):
+    #         visualize_reconstruction(X_full[id], title=f"Cluster {cl}, id {id},")
+    #         cntr[cl] += 1
+    # plt.show()
+
+    if show_pca:
+        lat_pca = PCA(n_components=2).fit_transform(lat_raw)
+
+        df_pca = pd.DataFrame({
+            'x': lat_pca[:, 0],
+            'y': lat_pca[:, 1],
+            'id': list(range(len(X_full))),
+            'cluster': clusters,
+            'event_density': y_vis.numpy()
+        })
+        for color in colors:
+            fig = px.scatter(df_pca, x='x', y='y',
+                                color=color,
+                                hover_data=['id', 'cluster', 'event_density'],
+                                title=f'Сжатое латентное пространство {model.model_name}')
+            fig.update_layout(scene=
+            dict(
+                xaxis_title='tPCA1',
+                yaxis_title='tPCA2',
+            ))
+            with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
+                fig.show()
+
+    if show_sne:
+        tsne = TSNE(
+            n_components=2,  # число выходных осей (2 или 3)
+            perplexity=perplexity,  # «ширина» локального окружения
+            learning_rate=100,  # скорость обучения
+            max_iter=500,  # число итераций оптимизации
+            random_state=42  # для воспроизводимости
+        )
+        lat_sne = tsne.fit_transform(lat_raw)
+
+        df_sne = pd.DataFrame({
+            'x': lat_sne[:, 0],
+            'y': lat_sne[:, 1],
+            'id': list(range(len(X_full))),
+            'cluster': clusters,
+            'event_density': y_vis.numpy()
+        })
+        for color in colors:
+            fig = px.scatter(df_sne, x='x', y='y',
+                                color=color,
+                                hover_data=['id', 'cluster', 'event_density'],
+                                title=f'Сжатое латентное пространство {model.model_name}, perp = {perplexity}')
+            fig.update_layout(scene=
+            dict(
+                xaxis_title='tSNE1',
+                yaxis_title='tSNE2',
+            ))
+            with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
+                fig.show()
+
+def visualize_3d_plotly(show_pca: bool = True, show_sne: bool = False, perplexity: int = 30,
+                        colors: list[str] = ["event_density"]):
+    pt_num = X_full.shape[0]
+    X_vis, y_vis = X_full[:pt_num].to('cpu'), y_full[:pt_num].to('cpu')
+
+    lat_raw = model.encode(X_vis).detach().cpu().numpy()
+    kmeans = KMeans(n_clusters=8, random_state=42)
+    # clusters = kmeans.fit_predict(lat_raw)
+    clusters = DBSCAN(eps=0.3, min_samples=10).fit_predict(lat_raw)
+
+    # cntr = [0 for i in range(100)]
+    #
+    # for id, cl in enumerate(clusters):
+    #     if cntr[cl] < 15 and (np.random.random() < 0.1):
+    #         visualize_reconstruction(X_full[id], title=f"Cluster {cl}, id {id},")
+    #         cntr[cl] += 1
+    # plt.show()
+
+    if show_pca:
+        lat_pca = PCA(n_components=3).fit_transform(lat_raw)
+
+        df_pca = pd.DataFrame({
+            'x': lat_pca[:, 0],
+            'y': lat_pca[:, 1],
+            'z': lat_pca[:, 2],
+            'id': list(range(len(X_full))),
+            'cluster': clusters,
+            'event_density': y_vis.numpy()
+        })
+
+        for color in colors:
+            fig = px.scatter_3d(df_pca, x='x', y='y', z='z',
+                            color=color,
+                            hover_data=['id', 'cluster', 'event_density'],
+                            title=f'Сжатое латентное пространство {model.model_name}')
+            fig.update_layout(scene=
+            dict(
+                xaxis_title='tPCA1',
+                yaxis_title='tPCA2',
+                zaxis_title='tPCA3'
+            ))
+            with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
+                fig.show()
 
     if show_sne:
         tsne = TSNE(
             n_components=3,  # число выходных осей (2 или 3)
             perplexity=perplexity,  # «ширина» локального окружения
             learning_rate=100,  # скорость обучения
-            max_iter=3000,  # число итераций оптимизации
+            max_iter=500,  # число итераций оптимизации
             random_state=42  # для воспроизводимости
         )
-        pts_sne = tsne.fit_transform(pts_raw)
+        lat_sne = tsne.fit_transform(lat_raw)
 
         df_sne = pd.DataFrame({
-            'x': pts_sne[:, 0],
-            'y': pts_sne[:, 1],
-            'z': pts_sne[:, 2],
-            'label': y_vis.numpy()
+            'x': lat_sne[:, 0],
+            'y': lat_sne[:, 1],
+            'z': lat_sne[:, 2],
+            'id': list(range(len(X_full))),
+            'cluster': clusters,
+            'event_density': y_vis.numpy()
         })
-        fig = px.scatter_3d(df_sne, x='x', y='y', z='z',
-                            color='label',
-                            title=f'Сжатое латентное пространство {model.model_name}, perp = {perplexity}')
-        fig.update_layout(scene=
-        dict(
-            xaxis_title='tSNE1',
-            yaxis_title='tSNE2',
-            zaxis_title='tSNE3'
-        ))
-        with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
-            fig.show()
-
-    if show_pca:
-        pts_pca = PCA(n_components=3).fit_transform(pts_raw)
-        df_pca = pd.DataFrame({
-            'x': pts_pca[:, 0],
-            'y': pts_pca[:, 1],
-            'z': pts_pca[:, 2],
-            'label': y_vis.numpy()
-        })
-
-        fig = px.scatter_3d(df_pca, x='x', y='y', z='z',
-                            color='label',
-                            title=f'Сжатое латентное пространство {model.model_name}')
-        fig.update_layout(scene=
-        dict(
-            xaxis_title='tPCA1',
-            yaxis_title='tPCA2',
-            zaxis_title='tPCA3'
-        ))
-        with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
-            fig.show()
+        for color in colors:
+            fig = px.scatter_3d(df_sne, x='x', y='y', z='z',
+                                color=color,
+                                hover_data=['id', 'cluster', 'event_density'],
+                                title=f'Сжатое латентное пространство {model.model_name}, perp = {perplexity}')
+            fig.update_layout(scene=
+            dict(
+                xaxis_title='tSNE1',
+                yaxis_title='tSNE2',
+                zaxis_title='tSNE3'
+            ))
+            with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull):
+                fig.show()
 
 
-conv_size = [4, 4]
+conv_size = []
 fc_size = []
-latent_dim = 8
+latent_dim = 16
 device = "cpu"
-load_loss = "0.255"
+load_loss = "0.000454"
 
 if __name__ == '__main__':
     model = CustomRaw2(latent_dim=latent_dim, conv_sizes=conv_size, fc_sizes=fc_size, input_channels=num_channels,
@@ -164,10 +250,9 @@ if __name__ == '__main__':
     model.eval()
     X_full = X_full.cpu()
     y_full = y_full.cpu()
-    # plt.hist(y_full, bins=50)
-    print(y_full[:100])
-    for i in range(0, 100):
-        if y_full[i] > 0.32:
+    plt.hist(y_full, bins=50)
+    for i in range(168, 1002):
+        if y_full[i] > 0.4:
             visualize_reconstruction(X_full[i])
     plt.show()
     # lId = 0
@@ -180,6 +265,9 @@ if __name__ == '__main__':
     #     for i in ker:
     #         plt.plot(i)
     #     plt.show()
-    visualize_3d_plotly()
-    # for perp in range(30, 51, 10):
-    #     visualize_3d_plotly(perp)
+    visualize_3d_plotly(colors=["event_density"])
+    #
+    for perp in range(20, 31, 10):
+        visualize_2d_plotly(show_sne=True, show_pca=False, perplexity=perp, colors=["cluster", "event_density"])
+
+    #visualize_2d(color="event_density")

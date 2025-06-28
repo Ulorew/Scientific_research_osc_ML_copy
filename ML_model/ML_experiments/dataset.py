@@ -27,7 +27,7 @@ class CustomDataset(Dataset):
 
 
 num_channels = 3
-wsz = 128
+wsz = 256
 # Prepare data
 
 data_path = f"../../Data/OscData_raw_{wsz}_{num_channels}"

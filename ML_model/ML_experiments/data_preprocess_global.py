@@ -15,7 +15,7 @@ from collections import defaultdict
 
 # dataset_path = "../../Data/datset_v1.csv"
 period_size = 32
-window_period_cnt = 4
+window_period_cnt = 8
 wsz = period_size * window_period_cnt
 etal_sim_th = -1  # 0.5  # max value of standard deviation with etalon, recommended to leave only abnormal events: 0.5
 unmatched_channels_th = 3  # threshold which states the least number of unmatched channels for measure to be considered abnormal
@@ -151,15 +151,33 @@ def process_file(filename: str):
     X = []
     y = []
 
+    # lpos = 0
+    # while lpos + cap_wsz <= len(data_track):
+    #     X.append(
+    #             gen_case(lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats))
+    #     events = data_track[op_names[:3]][lpos:lpos + cap_wsz]
+    #     y.append(events.mean().mean())
+    #     lpos += capture_step
+    #
+    #periodic
     lpos = find_near_period(pivot_seq, period_size // 2 + 3, channel_ampls[pivot_channel], max_steps=period_size * 2,
                             quit_on_miss=False)
     while lpos + cap_wsz <= len(data_track):
-        X.append(
-            gen_case(lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats))
-        events = data_track[op_names[:3]][lpos:lpos + cap_wsz]
-        y.append(events.mean().mean())
-        lpos = find_near_period(pivot_seq, lpos + (period_size), channel_ampls[pivot_channel],
-                                max_steps=3)
+        nomatch = match_etal(lpos, data_track=data_track, window_func=window_func)
+
+        if len(nomatch) >= unmatched_channels_th:
+            # X.append(
+            #     gen_case(cap_lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats,
+            #              capwsz=cap_wsz))
+            # events = data_track[op_names[:3]][lpos:rpos]
+            # y.append(events.mean().mean())
+
+            X.append(
+                gen_case(lpos, data_track=data_track, window_func=cap_window_func, feats=cap_feats))
+            events = data_track[op_names[:3]][lpos:lpos + cap_wsz]
+            y.append(events.mean().mean())
+            lpos = find_near_period(pivot_seq, lpos + (period_size), channel_ampls[pivot_channel],
+                                    max_steps=3)
 
     # for rpos in range(max(cap_wsz, wsz), len(data_track), capture_step):
     #     lpos = rpos - wsz

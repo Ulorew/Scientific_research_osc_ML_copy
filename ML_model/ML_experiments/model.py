@@ -91,6 +91,20 @@ class CustomRaw1(nn.Module):  # single spectrum reconstruction
         return rec
 
 
+def weights_init(m):
+    if isinstance(m, nn.Conv1d):
+        init.kaiming_normal_(m.weight, mode='fan_in')  #
+        if m.bias is not None:
+            init.zeros_(m.bias)
+    elif isinstance(m, nn.Linear):
+        init.xavier_normal_(m.weight)
+        if m.bias is not None:
+            init.zeros_(m.bias)
+    elif isinstance(m, nn.BatchNorm1d):
+        init.ones_(m.weight)
+        init.zeros_(m.bias)
+
+
 class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic layers
     def __init__(self,
                  latent_dim: int,
@@ -101,6 +115,10 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
                  kernel_size: int = 5):
         super(CustomRaw2, self).__init__()
         self.model_name = f"CustomRaw2_input{input_channels}x{input_length}_lat{latent_dim}_conv{conv_sizes}_fc{fc_sizes}_ker{kernel_size}"
+        # self.activation_func = nn.LeakyReLU(inplace=True)
+        # self.activation_func = nn.ReLU(inplace=True)
+        self.activation_func = nn.SiLU(inplace=True)
+        self.dropout = nn.Dropout(p=0.0)
 
         # --- Build Encoder conv layers dynamically ---
         conv_layers = []
@@ -109,8 +127,8 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
             conv_layers += [
                 nn.Conv1d(in_channels=in_ch, out_channels=out_ch,
                           kernel_size=kernel_size, stride=2, padding=kernel_size // 2),
-                nn.BatchNorm1d(out_ch),
-                nn.ReLU(True)
+                # nn.BatchNorm1d(out_ch),
+                self.activation_func
             ]
             in_ch = out_ch
         self.encoder_conv = nn.Sequential(*conv_layers)
@@ -129,7 +147,7 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
             enc_layers.append(nn.Linear(enc_dims[i], enc_dims[i + 1]))
             # add activation for all but last
             if i < len(enc_dims) - 2:
-                enc_layers.append(nn.ReLU(True))
+                enc_layers.extend([self.activation_func, self.dropout])
         self.encoder_fc = nn.Sequential(*enc_layers)
 
         # --- Build Decoder FC layers dynamically ---
@@ -138,7 +156,7 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
         for i in range(len(dec_dims) - 1):
             dec_layers.append(nn.Linear(dec_dims[i], dec_dims[i + 1]))
             if i < len(dec_dims) - 2:
-                dec_layers.append(nn.ReLU(True))
+                enc_layers.extend([self.activation_func, self.dropout])
         self.decoder_fc = nn.Sequential(*dec_layers)
 
         # --- Build Decoder conv layers dynamically ---
@@ -155,11 +173,11 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
                 # add activation+bn except last
                 if idx < len(rev_conv) - 1:
                     deconv_layers += [
-                        nn.BatchNorm1d(out_ch),
-                        nn.ReLU(True)
+                        self.activation_func
                     ]
                 in_ch = out_ch
         self.decoder_conv = nn.Sequential(*deconv_layers)
+        self.apply(weights_init)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         z = self.encoder_conv(x)
@@ -176,19 +194,6 @@ class CustomRaw2(nn.Module):  # single spectrum reconstruction with dynamic laye
         latent = self.encode(x)
         rec = self.decode(latent)
         return rec
-
-    def weights_init(self):
-        if isinstance(self, nn.Conv1d):
-            init.kaiming_normal_(self.weight, nonlinearity='relu')
-            if self.bias is not None:
-                init.zeros_(self.bias)
-        elif isinstance(self, nn.Linear):
-            init.xavier_normal_(self.weight)
-            if self.bias is not None:
-                init.zeros_(self.bias)
-        elif isinstance(self, nn.BatchNorm1d):
-            init.ones_(self.weight)
-            init.zeros_(self.bias)
 
 
 ### TRAINING
